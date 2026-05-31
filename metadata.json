@@ -1,0 +1,6 @@
+{
+  "name": "Sonic Vault",
+  "description": "Personal offline-ready music library and playlist manager using Google Drive Workspace.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
