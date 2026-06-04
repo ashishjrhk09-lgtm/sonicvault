@@ -53,7 +53,9 @@ export default function App() {
   const [user, setUser] = useState<any>(null);
   const [homeSongs, setHomeSongs] = useState<Song[]>([]);
   const hasRequestedFs = useRef(false);
-  const [currentPlaylistId, setCurrentPlaylistId] = useState<string | null>(null);
+  const [currentPlaylistId, setCurrentPlaylistId] = useState<string | null>(
+    null,
+  );
   const [currentSong, setCurrentSong] = useState<Song | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [isCheckingAuth, setIsCheckingAuth] = useState(true);
@@ -62,47 +64,17 @@ export default function App() {
   const [isAuthLoading, setIsAuthLoading] = useState(false);
   const [isOffline, setIsOffline] = useState(!navigator.onLine);
   
-  // PWA State
-  const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
-  const [isInstallable, setIsInstallable] = useState(false);
-  const [showSplash, setShowSplash] = useState(true);
-
   useEffect(() => {
     const handleOnline = () => setIsOffline(false);
     const handleOffline = () => setIsOffline(true);
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
-
-    window.addEventListener('beforeinstallprompt', (e) => {
-      e.preventDefault();
-      setDeferredPrompt(e);
-      setIsInstallable(true);
-    });
-
-    if (window.matchMedia('(display-mode: standalone)').matches) {
-       setIsInstallable(false);
-    }
-    
-    const splashTimer = setTimeout(() => setShowSplash(false), 2000);
-
     return () => {
        window.removeEventListener('online', handleOnline);
        window.removeEventListener('offline', handleOffline);
-       clearTimeout(splashTimer);
     };
   }, []);
-
-  const handleInstallClick = async () => {
-     if (deferredPrompt) {
-       deferredPrompt.prompt();
-       const choiceResult = await deferredPrompt.userChoice;
-       if (choiceResult.outcome === 'accepted') {
-         setIsInstallable(false);
-       }
-       setDeferredPrompt(null);
-     }
-  };
-
+  
   useEffect(() => {
     if (window.location.pathname === '/reset-password') {
        setAuthMode("resetPassword");
@@ -297,37 +269,6 @@ export default function App() {
   useEffect(() => {
     const fetchHomeSongs = async () => {
        try {
-          if (supabase) {
-             // Fetch global saved songs from Supabase to act as Recommended
-             const { data, error } = await supabase.from('songs').select('*').limit(100);
-             if (!error && data && data.length > 0) {
-                // Shuffle array (Fischer-Yates)
-                for (let i = data.length - 1; i > 0; i--) {
-                   const j = Math.floor(Math.random() * (i + 1));
-                   [data[i], data[j]] = [data[j], data[i]];
-                }
-                const mapped: Song[] = data.slice(0, 50).map((item: any) => ({
-                   id: item.id,
-                   title: item.title,
-                   youtubeUrl: item.youtube_url,
-                   thumbnailUrl: item.thumbnail_url,
-                   playlistId: "", // unassigned for global recommended
-                }));
-                // Filter duplicates by videoId
-                const uniqueIds = new Set();
-                const uniqueMapped = mapped.filter((s) => {
-                   if (uniqueIds.has(s.youtubeUrl)) return false;
-                   uniqueIds.add(s.youtubeUrl);
-                   return true;
-                });
-                setHomeSongs(uniqueMapped);
-                
-                // If we got enough songs, we can return early
-                if (uniqueMapped.length >= 10) return;
-             }
-          }
-          
-          // fallback
           const { res, text } = await safeApiFetch(`/api/home/songs`);
           if (res.ok) {
              const data = JSON.parse(text);
@@ -339,17 +280,7 @@ export default function App() {
                     thumbnailUrl: `https://img.youtube.com/vi/${item.id?.videoId || item.id}/hqdefault.jpg`,
                     playlistId: "", // unassigned
                  }));
-                 
-                 // Combine remaining songs with mapped API songs
-                 setHomeSongs((prev) => {
-                     const uniqueIds = new Set(prev.map(s => s.youtubeUrl));
-                     const newMapped = mapped.filter((s) => {
-                        if (uniqueIds.has(s.youtubeUrl)) return false;
-                        uniqueIds.add(s.youtubeUrl);
-                        return true;
-                     });
-                     return [...prev, ...newMapped].slice(0, 50);
-                 });
+                 setHomeSongs(mapped.slice(0, 50));
              }
           }
        } catch (err) {
@@ -357,7 +288,7 @@ export default function App() {
        }
     };
     fetchHomeSongs();
-  }, [supabase]);
+  }, []);
 
   const setDirectAddSong = async (videoId: string, title: string) => {
     if (!selectedYtPlaylistId) {
@@ -376,12 +307,12 @@ export default function App() {
     setShowAddSong(false);
     showToast("Song added!");
     
-    if (supabase && user && newSong.playlistId) {
-       await supabase.from('playlist_songs').insert([{
+    if (supabase && user) {
+       await supabase.from('songs').insert([{
            id: newSong.id,
-           playlist_id: newSong.playlistId,
+           user_id: user.id,
            title: newSong.title,
-           video_id: videoId,
+           youtube_url: newSong.youtubeUrl,
            thumbnail_url: newSong.thumbnailUrl
        }]);
     }
@@ -723,21 +654,21 @@ export default function App() {
      }
   };
 
-  if (isLoading || isCheckingAuth || showSplash) {
+  if (isLoading || isCheckingAuth) {
     return (
-      <div className="min-h-screen bg-black flex flex-col items-center justify-center text-white font-sans fixed inset-0 z-[200]">
-         <div className="w-32 h-32 flex items-center justify-center mb-6 relative">
+      <div className="min-h-screen bg-black flex flex-col items-center justify-center text-white font-sans">
+         <div className="w-32 h-32 flex items-center justify-center mb-12 relative">
             <div className="absolute inset-0 border-t-2 border-purple-500 rounded-full animate-spin"></div>
             <img src={customLogo} alt="Sonic Vault" className="w-28 h-28 object-cover rounded-full shadow-[0_0_30px_rgba(168,85,247,0.4)]" />
          </div>
-         <h2 className="text-2xl font-bold mt-2 mb-8 text-neutral-300">Enjoy Your Sonic</h2>
-         <div className="w-64 h-1 bg-neutral-900 rounded-full overflow-hidden relative">
-            <div className="absolute top-0 bottom-0 left-0 w-1/2 bg-purple-500 rounded-full" style={{ animation: "progress 2s ease-in-out infinite" }}></div>
+         <div className="w-64 h-1 bg-neutral-900 rounded-full overflow-hidden">
+            <div className="h-full bg-purple-500 rounded-full w-full animate-pulse origin-left opacity-80" style={{ animation: "progress 2s ease-in-out infinite" }}></div>
          </div>
          <style>{`
             @keyframes progress {
-               0% { transform: translateX(-100%); }
-               100% { transform: translateX(200%); }
+               0% { transform: scaleX(0); }
+               50% { transform: scaleX(1); opacity: 1; }
+               100% { transform: scaleX(0); opacity: 0; }
             }
          `}</style>
       </div>
@@ -900,26 +831,24 @@ export default function App() {
   }
 
   return (
-    <div className="h-[100dvh] flex flex-col bg-black text-white font-sans overflow-hidden overscroll-none relative">
-      <div className="absolute inset-0 bg-gradient-to-br from-purple-900/20 via-black to-blue-900/20 pointer-events-none z-0"></div>
-      
+    <div className="h-[100dvh] flex flex-col bg-black text-white font-sans overflow-hidden overscroll-none">
       {isOffline && (
-         <div className="bg-red-600/90 backdrop-blur-md text-white text-xs font-bold text-center py-1.5 relative z-[60] animate-in slide-in-from-top flex items-center justify-center gap-2 shadow-lg">
+         <div className="bg-red-600 text-white text-xs font-bold text-center py-1.5 relative z-50 animate-in slide-in-from-top flex items-center justify-center gap-2 shadow-lg">
             No internet connection
          </div>
       )}
 
       {/* Toast Notification */}
       {toastMsg && (
-        <div className="fixed top-6 left-1/2 -translate-x-1/2 bg-neutral-900/80 backdrop-blur-xl text-white px-6 py-3 rounded-full shadow-[0_4px_30px_rgba(0,0,0,0.5)] z-[150] animate-in slide-in-from-top-4 font-medium text-sm border border-white/10 whitespace-nowrap">
+        <div className="fixed top-6 left-1/2 -translate-x-1/2 bg-neutral-800 text-white px-6 py-3 rounded-full shadow-2xl z-[150] animate-in slide-in-from-top-4 font-medium text-sm border border-neutral-700 whitespace-nowrap">
           {toastMsg}
         </div>
       )}
 
       {/* Confirm Dialog */}
       {confirmDialog && (
-        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/60 backdrop-blur-sm px-4 animate-in fade-in">
-          <div className="bg-neutral-900/80 backdrop-blur-xl border border-white/10 rounded-3xl p-6 max-w-sm w-full shadow-[0_4px_30px_rgba(0,0,0,0.5)] text-center">
+        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/80 px-4 animate-in fade-in">
+          <div className="bg-neutral-900 border border-neutral-800 rounded-3xl p-6 max-w-sm w-full shadow-2xl text-center">
             <h3 className="text-xl font-bold text-white mb-2">
               Confirm Action
             </h3>
@@ -929,13 +858,13 @@ export default function App() {
             <div className="flex justify-center gap-3">
               <button
                 onClick={() => setConfirmDialog(null)}
-                className="px-5 py-2.5 rounded-xl font-semibold text-neutral-400 hover:text-white hover:bg-white/10 transition-colors"
+                className="px-5 py-2.5 rounded-xl font-semibold text-neutral-400 hover:text-white hover:bg-neutral-800 transition-colors"
               >
                 Cancel
               </button>
               <button
                 onClick={confirmDialog.onConfirm}
-                className="px-5 py-2.5 rounded-xl font-semibold bg-red-500/20 text-red-500 hover:bg-red-500/30 transition-colors"
+                className="px-5 py-2.5 rounded-xl font-semibold bg-red-500/10 text-red-500 hover:bg-red-500/20 transition-colors"
               >
                 Delete
               </button>
@@ -946,7 +875,7 @@ export default function App() {
 
       {/* Main Scrollable Area */}
       <div
-        className={`flex-1 overflow-y-auto px-4 sm:px-6 pt-6 pb-40 relative z-10 ${
+        className={`flex-1 overflow-y-auto px-4 sm:px-6 pt-6 pb-40 ${
           currentSong ? "pb-48" : "pb-24"
         }`}
       >
@@ -1156,36 +1085,35 @@ export default function App() {
                {!searchQuery && ytSearchResults.length === 0 && (
                  <div>
                    <div className="flex items-center justify-between mb-6">
-                     <h2 className="text-xl font-bold text-white flex items-center gap-2 tracking-wide font-sans">
-                       <Music className="w-6 h-6 text-purple-400 drop-shadow-[0_0_10px_rgba(168,85,247,0.5)]" /> Recommended
+                     <h2 className="text-xl font-bold text-white uppercase flex items-center gap-2 tracking-wide">
+                       <Music className="w-6 h-6 text-purple-400" /> Recent Vault Songs
                      </h2>
                    </div>
-                   {homeSongs.length === 0 ? (
+                   {db.songs.length === 0 ? (
                       <div className="text-center py-12 text-neutral-500">
-                         <Loader2 className="w-8 h-8 animate-spin mx-auto mb-4 text-purple-500" />
-                         <p>Loading recommendations...</p>
+                         <p>Your vault is empty. Search and add some songs to playlists!</p>
                       </div>
                    ) : (
-                     <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-5">
-                       {homeSongs.map((song, i) => (
+                     <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
+                       {db.songs.slice(0, 20).map((song) => (
                          <div
-                           key={i}
-                           className="flex flex-col gap-3 group cursor-pointer backdrop-blur-xl bg-white/[0.03] border border-white/10 rounded-3xl p-3 shadow-lg hover:shadow-[0_0_30px_rgba(168,85,247,0.15)] hover:bg-white/10 transition-all duration-300"
-                           onClick={() => setLivePlaySong(song.youtubeUrl.replace('https://www.youtube.com/watch?v=', ''), song.title)}
+                           key={song.id}
+                           className="flex flex-col gap-3 group cursor-pointer"
+                           onClick={() => playSong(song)}
                          >
-                           <div className="w-full aspect-video rounded-2xl overflow-hidden relative shadow-[0_4px_30px_rgba(0,0,0,0.1)]">
+                           <div className="w-full aspect-video rounded-2xl overflow-hidden relative bg-neutral-900 border border-neutral-800">
                              <img
                                src={song.thumbnailUrl}
-                               className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
+                               className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
                                alt="thumbnail"
                              />
-                             <div className="absolute inset-0 bg-black/40 backdrop-blur-[2px] flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all duration-300">
-                               <Play className="w-12 h-12 text-white fill-white drop-shadow-[0_0_15px_rgba(255,255,255,0.5)] scale-90 group-hover:scale-100 transition-transform duration-300" />
+                             <div className="absolute inset-0 bg-black/30 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-300">
+                               <Play className="w-12 h-12 text-white fill-white shadow-2xl" />
                              </div>
                            </div>
-                           <div className="flex-1 min-w-0 px-2 pb-1">
+                           <div className="flex-1 min-w-0 pr-2">
                              <p
-                               className="text-sm font-bold text-white line-clamp-2 leading-snug group-hover:text-purple-300 transition-colors"
+                               className="text-sm font-bold text-white line-clamp-2 leading-snug group-hover:text-purple-400 transition-colors"
                              >{song.title}</p>
                            </div>
                          </div>
@@ -1287,7 +1215,7 @@ export default function App() {
             <h2 className="text-xl font-bold tracking-tight mb-8">
               Profile
             </h2>
-              <div className="bg-neutral-900 border border-neutral-800 rounded-3xl p-8 text-center space-y-6 mb-8">
+            <div className="bg-neutral-900 border border-neutral-800 rounded-3xl p-8 text-center space-y-6 mb-8">
                <div className="w-24 h-24 mx-auto rounded-full bg-purple-500/20 flex items-center justify-center">
                   {user && user.user_metadata?.avatar_url ? (
                      <img src={user.user_metadata.avatar_url} alt="Avatar" className="w-full h-full rounded-full object-cover" />
@@ -1300,14 +1228,6 @@ export default function App() {
                  <div>
                    <h3 className="text-xl font-bold text-white">{user.user_metadata?.custom_name || user.user_metadata?.full_name || user.email}</h3>
                    <p className="text-neutral-400 text-sm mb-6 mt-1">{user.email}</p>
-                   {isInstallable && (
-                     <button
-                        onClick={handleInstallClick}
-                        className="bg-purple-600 hover:bg-purple-500 text-white font-bold py-3 px-8 rounded-full transition-colors mb-4 block mx-auto"
-                     >
-                       Install Sonic Vault App
-                     </button>
-                   )}
                    {supabase && (
                      <button
                         onClick={async () => {
@@ -1491,7 +1411,7 @@ export default function App() {
       )}
 
       {/* Bottom Navigation */}
-      <div className="fixed bottom-0 left-0 right-0 h-16 bg-black/60 backdrop-blur-3xl border-t border-white/10 flex items-center justify-around px-2 z-[45] pb-safe shadow-[0_-10px_40px_rgba(0,0,0,0.5)]">
+      <div className="fixed bottom-0 left-0 right-0 h-20 bg-black/90 backdrop-blur-xl border-t border-neutral-900 flex items-center justify-around px-2 z-[45] pb-safe">
         {[
           { id: "home", icon: Home, label: "Home" },
           { id: "playlists", icon: ListMusic, label: "Vault" },
@@ -1508,18 +1428,18 @@ export default function App() {
                   }
               }
             }}
-            className={`flex flex-col items-center justify-center w-20 h-14 rounded-2xl gap-1 transition-all duration-300 ${
+            className={`flex flex-col items-center justify-center w-24 h-full gap-1 transition-colors ${
               activeTab === tab.id
-                ? "text-white bg-white/10 shadow-[inset_0_1px_1px_rgba(255,255,255,0.1)] scale-105"
-                : "text-neutral-500 hover:text-neutral-300 hover:bg-white/5"
+                ? "text-white"
+                : "text-neutral-500 hover:text-neutral-300"
             }`}
           >
             <tab.icon
-              className={`w-5 h-5 transition-transform duration-300 ${
-                activeTab === tab.id ? "scale-110 drop-shadow-[0_0_10px_rgba(255,255,255,0.5)]" : "scale-100"
+              className={`w-6 h-6 transition-transform ${
+                activeTab === tab.id ? "scale-110" : "scale-100"
               }`}
             />
-            <span className="text-[10px] font-bold tracking-wider uppercase drop-shadow-md">
+            <span className="text-[10px] font-semibold tracking-wide">
               {tab.label}
             </span>
           </button>

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { AppDatabase, Song } from "../types";
 import { Play, Pause, SkipForward, SkipBack, X, Minimize2, Music, Plus, Loader2 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
-import customLogo from "../assets/images/logo.png";
+import customLogo from "../assets/images/sonic_vault_logo_1780216990059.png";
 
 // window.YT types
 declare global {
@@ -48,24 +48,6 @@ export function AudioPlayer({
   const updateTimerRef = useRef<any>(null);
   const seekTimeoutRef = useRef<any>(null);
   const sliderRef = useRef<HTMLInputElement>(null);
-  const userPausedRef = useRef<boolean>(false);
-  
-  // Refs to fix stale closures in YT events
-  const latestLiveQueue = useRef<Song[]>([]);
-  const latestCurrentSong = useRef<Song | null>(currentSong);
-  const latestOnNext = useRef(onNext);
-  
-  useEffect(() => {
-     latestLiveQueue.current = liveQueue;
-  }, [liveQueue]);
-  
-  useEffect(() => {
-     latestCurrentSong.current = currentSong;
-  }, [currentSong]);
-  
-  useEffect(() => {
-     latestOnNext.current = onNext;
-  }, [onNext]);
 
   // Parse YouTube video ID
   const getYoutubeVideoId = (url: string) => {
@@ -79,73 +61,6 @@ export function AudioPlayer({
   const videoId = currentSong
     ? getYoutubeVideoId(currentSong.youtubeUrl)
     : null;
-
-  // Media Session implementation
-  useEffect(() => {
-    if (!currentSong) return;
-
-    if ('mediaSession' in navigator) {
-      navigator.mediaSession.metadata = new MediaMetadata({
-        title: currentSong.title,
-        artist: 'Sonic Vault',
-        album: 'YouTube',
-        artwork: [
-          { src: currentSong.thumbnailUrl, sizes: '96x96', type: 'image/jpeg' },
-          { src: currentSong.thumbnailUrl, sizes: '128x128', type: 'image/jpeg' },
-          { src: currentSong.thumbnailUrl, sizes: '192x192', type: 'image/jpeg' },
-          { src: currentSong.thumbnailUrl, sizes: '256x256', type: 'image/jpeg' },
-          { src: currentSong.thumbnailUrl, sizes: '384x384', type: 'image/jpeg' },
-          { src: currentSong.thumbnailUrl, sizes: '512x512', type: 'image/jpeg' }
-        ]
-      });
-
-      navigator.mediaSession.setActionHandler('play', () => {
-        if (playerRef.current?.playVideo) {
-           userPausedRef.current = false;
-           playerRef.current.playVideo();
-        }
-      });
-      navigator.mediaSession.setActionHandler('pause', () => {
-        if (playerRef.current?.pauseVideo) {
-           userPausedRef.current = true;
-           playerRef.current.pauseVideo();
-        }
-      });
-      navigator.mediaSession.setActionHandler('previoustrack', () => skipPrev());
-      navigator.mediaSession.setActionHandler('nexttrack', () => skipNext());
-    }
-  }, [currentSong]);
-
-  // Wake lock and Audio Context to prevent background throttling
-  useEffect(() => {
-    let audioCtx: AudioContext | null = null;
-    let oscillator: OscillatorNode | null = null;
-    let gainNode: GainNode | null = null;
-
-    try {
-      if (isPlaying) {
-        audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
-        if (audioCtx.state === 'suspended') audioCtx.resume();
-        oscillator = audioCtx.createOscillator();
-        gainNode = audioCtx.createGain();
-        gainNode.gain.value = 0.001; // tiny gain just to keep audio channel alive
-        oscillator.connect(gainNode);
-        gainNode.connect(audioCtx.destination);
-        oscillator.start();
-      }
-    } catch (e) {
-      console.warn("AudioContext wake failed", e);
-    }
-
-    return () => {
-      try {
-        oscillator?.stop();
-        oscillator?.disconnect();
-        gainNode?.disconnect();
-        audioCtx?.close();
-      } catch (e) {}
-    };
-  }, [isPlaying]);
 
   // Load YouTube Iframe API once
   useEffect(() => {
@@ -177,7 +92,6 @@ export function AudioPlayer({
           controls: 0,
           vq: "tiny", // Force low quality 144p
           autoplay: 1,
-          origin: window.location.origin
         },
         events: {
           onReady: (event: any) => {
@@ -190,13 +104,8 @@ export function AudioPlayer({
               setIsBuffering(false);
               startProgressLoop();
             } else if (event.data === window.YT.PlayerState.PAUSED) {
-              if (document.hidden && !userPausedRef.current) {
-                 // Prevent auto-pause when tabs minified / minimized on mobile
-                 event.target.playVideo();
-              } else {
-                 setIsPlaying(false);
-                 setIsBuffering(false);
-              }
+              setIsPlaying(false);
+              setIsBuffering(false);
             } else if (event.data === window.YT.PlayerState.BUFFERING) {
               setIsBuffering(true);
             } else if (event.data === window.YT.PlayerState.ENDED) {
@@ -204,10 +113,6 @@ export function AudioPlayer({
               setIsBuffering(false);
             }
           },
-          onError: (event: any) => {
-            console.warn("YT Error:", event.data);
-            skipNext(); // skip on error
-          }
         },
       });
     } else {
@@ -225,15 +130,6 @@ export function AudioPlayer({
   useEffect(() => {
        const loadLiveQueue = async () => {
           try {
-             // If playing from a specific playlist, show ONLY that playlist's songs
-             if (currentSong.playlistId && db.playlists.some(p => p.id === currentSong.playlistId)) {
-                const pSongs = db.songs.filter(s => s.playlistId === currentSong.playlistId);
-                if (pSongs.length > 0) {
-                   setLiveQueue(pSongs);
-                   return;
-                }
-             }
-
              // Proper Algorithm for Up Next:
              // 1. Most recently played songs (history)
              // 2. User's saved songs (vault)
@@ -326,38 +222,32 @@ export function AudioPlayer({
     if (playerRef.current) {
       const state = playerRef.current.getPlayerState();
       if (state === window.YT.PlayerState.PLAYING || state === 1) {
-         userPausedRef.current = true;
          playerRef.current.pauseVideo();
       } else {
-         userPausedRef.current = false;
          playerRef.current.playVideo();
       }
     }
   };
 
   const skipNext = () => {
-    const song = latestCurrentSong.current;
-    const queue = latestLiveQueue.current;
-    if (!song || queue.length === 0) return;
-    const currentIndex = queue.findIndex(
-      (s) => s.youtubeUrl === song.youtubeUrl,
+    if (!currentSong || playlistSongs.length === 0) return;
+    const currentIndex = playlistSongs.findIndex(
+      (s) => s.id === currentSong.id,
     );
     const nextIndex =
-      currentIndex !== -1 ? (currentIndex + 1) % queue.length : 0;
-    latestOnNext.current(queue[nextIndex]);
+      currentIndex !== -1 ? (currentIndex + 1) % playlistSongs.length : 0;
+    onNext(playlistSongs[nextIndex]);
   };
 
   const skipPrev = () => {
-    const song = latestCurrentSong.current;
-    const queue = latestLiveQueue.current;
-    if (!song || queue.length === 0) return;
-    const currentIndex = queue.findIndex(
-      (s) => s.youtubeUrl === song.youtubeUrl,
+    if (!currentSong || playlistSongs.length === 0) return;
+    const currentIndex = playlistSongs.findIndex(
+      (s) => s.id === currentSong.id,
     );
     let prevIndex =
-      currentIndex !== -1 ? currentIndex - 1 : queue.length - 1;
-    if (prevIndex < 0) prevIndex = queue.length - 1;
-    latestOnNext.current(queue[prevIndex]);
+      currentIndex !== -1 ? currentIndex - 1 : playlistSongs.length - 1;
+    if (prevIndex < 0) prevIndex = playlistSongs.length - 1;
+    onNext(playlistSongs[prevIndex]);
   };
 
   const seekForward = () => {
@@ -421,13 +311,13 @@ export function AudioPlayer({
 
   return (
     <>
-      <div className="fixed top-0 left-0 w-[200px] h-[200px] opacity-0 pointer-events-none z-[-50]">
+      <div className="absolute top-0 left-0 opacity-0 pointer-events-none w-0 h-0">
          <div ref={containerRef} id="yt-player"></div>
       </div>
 
       {isMinimized ? (
         <div 
-          className="fixed bottom-[70px] left-2 right-2 md:left-auto md:right-4 md:w-96 z-[50] bg-neutral-900/90 backdrop-blur-xl border border-neutral-800 rounded-3xl flex items-center p-2 shadow-2xl animate-in slide-in-from-bottom cursor-pointer hover:bg-neutral-800/90 transition-colors"
+          className="fixed bottom-24 left-2 right-2 md:left-auto md:right-4 md:w-96 z-[50] bg-neutral-900/90 backdrop-blur-xl border border-neutral-800 rounded-3xl flex items-center p-2 shadow-2xl animate-in slide-in-from-bottom cursor-pointer hover:bg-neutral-800/90 transition-colors"
           onClick={() => onMinimize && onMinimize()}
         >
           <div className="w-12 h-12 flex-shrink-0 rounded-2xl overflow-hidden relative group ml-1">
@@ -698,7 +588,7 @@ export function AudioPlayer({
           <div className="w-12 h-1.5 bg-neutral-700/50 rounded-full absolute top-2 left-1/2 -translate-x-1/2 md:hidden"></div>
           <h3 className="text-lg font-bold text-white flex items-center gap-2 mt-2 md:mt-0">
             <Music className="w-5 h-5 text-purple-400" />
-            {(currentSong.playlistId && db.playlists.some(p => p.id === currentSong.playlistId)) ? "Up Next" : "Recommended"}
+            Recommended
           </h3>
           <span className="text-xs font-semibold text-neutral-500 bg-neutral-800 px-3 py-1 rounded-full mt-2 md:mt-0">
             {playlistSongs.length} songs

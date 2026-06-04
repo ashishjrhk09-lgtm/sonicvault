@@ -1,4 +1,3 @@
-import "dotenv/config";
 import express from "express";
 import cors from "cors";
 import path from "path";
@@ -87,8 +86,7 @@ app.get("/api/youtube/suggest", async (req, res) => {
       res.json([]);
       return;
     }
-    const enhancedQuery = query.toLowerCase().includes("song") ? query : query + " song";
-    const response = await fetch(`https://suggestqueries.google.com/complete/search?client=firefox&ds=yt&q=${encodeURIComponent(enhancedQuery)}`);
+    const response = await fetch(`https://suggestqueries.google.com/complete/search?client=firefox&ds=yt&q=${encodeURIComponent(query)}`);
     const data = await response.json();
     res.json(data[1] || []);
   } catch (error) {
@@ -157,46 +155,35 @@ app.get("/api/youtube/search", async (req, res) => {
        const videosData = await videosResponse.json();
        
        if (videosResponse.ok && videosData.items) {
-           const blockedKeywords = ['short', 'shorts', 'podcast', 'interview', 'reaction', 'news', 'live', 'stream', 'movie', 'film', 'trailer', 'teaser', 'review', 'vlog', 'episode', 'web series'];
-           const allowedKeywords = ['song', 'songs', 'music', 'audio', 'official audio', 'lyrics', 'lyrical', 'album'];
+           const blockedKeywords = ['short', 'shorts', 'podcast', 'interview', 'movie', 'trailer', 'reaction', 'news', 'live', 'vlog'];
+           const allowedKeywords = ['song', 'songs', 'music', 'audio', 'official audio', 'lyrical', 'lyrics'];
            
            const parseISO8601Duration = (duration: string) => {
               const match = duration.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/);
               if (!match) return 0;
-              const hours = parseInt(match[1] || '0', 10);
-              const minutes = parseInt(match[2] || '0', 10);
-              const seconds = parseInt(match[3] || '0', 10);
+              const hours = parseInt(match[1]) || 0;
+              const minutes = parseInt(match[2]) || 0;
+              const seconds = parseInt(match[3]) || 0;
               return hours * 3600 + minutes * 60 + seconds;
            };
 
            finalItems = videosData.items.filter((video: any) => {
                const duration = parseISO8601Duration(video.contentDetails?.duration || '');
-               if (duration < 60) return false; // reject below 60 sec
+               if (duration < 60) return false;
                
                const title = (video.snippet?.title || '').toLowerCase();
-               const channelTitle = (video.snippet?.channelTitle || '').toLowerCase();
-               const combinedText = title + ' ' + channelTitle;
                
-               // Match words using boundary to avoid rejecting "streams" if it wasn't specified, but includes is safer for exactly what user asked
-               // Actually using regex bounds is best to avoid rejecting "alive" instead of "live", but user said "agar title me ye words milte hain".
-               // Let's use word boundaries \b for safety.
-               const isBlocked = blockedKeywords.some(kw => {
-                  const regex = new RegExp(`\\b${kw}\\b`, 'i');
-                  return regex.test(title) || regex.test(channelTitle);
-               });
+               // Exact word boundary matching for some keywords to avoid false positives?
+               // The prompt asks to "Convert title to lowercase. Blocked Keywords: short, shorts, podcast..."
+               // Standard includes is probably fine for these since they aren't often part of other words, 
+               // but a regex with word bounds is safer. Let's use simple includes.
+               if (blockedKeywords.some(kw => title.includes(kw))) return false;
                
-               // The prompt also says "Reject live streams", "Reject podcasts", "Reject any YouTube URL containing '/shorts/'".
-               // YouTube Search API doesn't return "/shorts/" URL directly, it returns videoId. But shorts are just videos. Duration < 60s catches them anyway.
-               if (video.snippet?.liveBroadcastContent !== 'none' && video.snippet?.liveBroadcastContent !== undefined) {
-                   return false; // Reject live streams natively
-               }
-
-               if (isBlocked) return false;
                return true;
            }).map((video: any) => {
                let score = 0;
                const title = (video.snippet?.title || '').toLowerCase();
-               if (allowedKeywords.some(kw => new RegExp(`\\b${kw}\\b`, 'i').test(title))) score += 1;
+               if (allowedKeywords.some(kw => title.includes(kw))) score += 1;
                return { ...video, id: { videoId: video.id }, _score: score };
            }).sort((a: any, b: any) => b._score - a._score).map((video: any) => {
                delete video._score;
@@ -213,16 +200,12 @@ app.get("/api/youtube/search", async (req, res) => {
           .from("search_cache")
           .upsert({ query: lowerQuery, results: dataToCacheAndReturn });
         // Log search asynchronously
-        const userId = Array.isArray(req.headers['x-user-id']) ? req.headers['x-user-id'][0] : req.headers['x-user-id'] || 'anonymous';
+        const userId = req.headers['x-user-id'] || 'anonymous';
         supabase.from('search_logs').insert({ query: lowerQuery, user_id: userId, source: 'api', created_at: new Date().toISOString() }).then(() => {}, () => {});
       } catch (err) {
         console.warn("Supabase write error:", err);
       }
     } else {
-      if (searchCache.size > 100) {
-         const firstKey = searchCache.keys().next().value;
-         if (firstKey) searchCache.delete(firstKey);
-      }
       searchCache.set(lowerQuery, dataToCacheAndReturn);
     }
     res.json(dataToCacheAndReturn);
@@ -271,9 +254,7 @@ app.get("/api/youtube/video", async (req, res) => {
 
 // Home Screen Songs API (fetch from cache database)
 app.get("/api/home/songs", async (req, res) => {
-  const blockedKeywords = ['short', 'shorts', 'podcast', 'interview', 'reaction', 'news', 'live', 'stream', 'movie', 'film', 'trailer', 'teaser', 'review', 'vlog', 'episode', 'web series'];
-
-  let allItems: any[] = [];
+  const blockedKeywords = ['short', 'shorts', 'podcast', 'interview', 'movie', 'trailer', 'reaction', 'news', 'live', 'vlog'];
 
   if (supabase) {
     try {
@@ -283,56 +264,38 @@ app.get("/api/home/songs", async (req, res) => {
         .limit(20); 
 
       if (!error && data) {
+         let allItems: any[] = [];
          data.forEach((row: any) => {
             if (row.results && row.results.items) {
                allItems = [...allItems, ...row.results.items.filter((i: any) => {
                    if (!i.id?.videoId) return false;
                    const title = (i.snippet?.title || '').toLowerCase();
-                   if (blockedKeywords.some(kw => new RegExp(`\\b${kw}\\b`, 'i').test(title))) return false;
+                   if (blockedKeywords.some(kw => title.includes(kw))) return false;
                    return true;
                })];
             }
          });
+         // Shuffle and pick 50
+         allItems = allItems.sort(() => 0.5 - Math.random()).slice(0, 50);
+         res.json({ items: allItems });
+         return;
       }
     } catch(err) {
       console.warn("Supabase read for home page error:", err);
     }
   }
 
-  if (allItems.length < 10) {
-    searchCache.forEach((value) => {
-       if (value && value.items) {
-           allItems = [...allItems, ...value.items.filter((i: any) => {
-               if (!i.id?.videoId) return false;
-               const title = (i.snippet?.title || '').toLowerCase();
-               if (blockedKeywords.some(kw => new RegExp(`\\b${kw}\\b`, 'i').test(title))) return false;
-               return true;
-           })];
-       }
-    });
-  }
-
-  if (allItems.length < 15) {
-     // Fallback to fetch popular songs if we don't have enough in cache
-     try {
-       const YOUTUBE_API_KEY = process.env.YOUTUBE_API_KEY || "AIzaSyDuzJFgEdjT-0irA3AJMQdCRQ90G6O5-Us";
-       const query = "latest popular music songs";
-       const searchUrl = `https://www.googleapis.com/youtube/v3/search?part=snippet&maxResults=30&q=${encodeURIComponent(query)}&type=video&key=${YOUTUBE_API_KEY}`;
-       const searchResponse = await fetch(searchUrl);
-       const searchData = await searchResponse.json();
-       if (searchResponse.ok && searchData.items) {
-           allItems = [...allItems, ...searchData.items.filter((i: any) => {
-                if (!i.id?.videoId) return false;
-                const title = (i.snippet?.title || '').toLowerCase();
-                if (blockedKeywords.some(kw => new RegExp(`\\b${kw}\\b`, 'i').test(title))) return false;
-                return true;
-           })];
-       }
-     } catch (err) {
-        console.warn("Fallback api for home failed", err);
+  let allItems: any[] = [];
+  searchCache.forEach((value) => {
+     if (value && value.items) {
+         allItems = [...allItems, ...value.items.filter((i: any) => {
+             if (!i.id?.videoId) return false;
+             const title = (i.snippet?.title || '').toLowerCase();
+             if (blockedKeywords.some(kw => title.includes(kw))) return false;
+             return true;
+         })];
      }
-  }
-
+  });
   allItems = allItems.sort(() => 0.5 - Math.random()).slice(0, 50);
   res.json({ items: allItems });
 });
